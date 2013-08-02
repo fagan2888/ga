@@ -8,8 +8,8 @@ Created on 14 mai 2013
 from __future__ import division
 from pandas import DataFrame, read_csv, concat, ExcelFile, HDFStore
 from numpy import NaN, arange, hstack, array
-from src.lib.AccountingCohorts import AccountingCohorts
-from cohorte import Cohorts
+from src.lib.cohorts.accounting_cohorts import AccountingCohorts
+from src.lib.cohorts.cohort import Cohorts
 
 class DataCohorts(Cohorts):
     '''
@@ -84,7 +84,9 @@ class DataCohorts(Cohorts):
             else:
                 df_tot.append(df_insert, ignore_index=True)
                 df_tot = df_tot.set_index(['age','sex','year'])
-
+        
+        print df_tot
+        print len(df_tot)
         self.update(df_tot)
 
 
@@ -299,7 +301,34 @@ class DataCohorts(Cohorts):
         pv_percapita = DataFrame(pv_gen[typ]/pop['pop'])
         pv_percapita.columns = [typ]
         return AccountingCohorts(pv_percapita)
-
+    
+    def get_average_difference(self, consumption=[], income=[], year=None):
+        """
+        Use the data to compute the average age of the consummers and 
+        the average age of the workers and returns the difference between the two.
+        
+        Warning : must be performed on filled DataCohorts.
+        """
+#         Plan : récupérer le revenu du travail. et la conso totale en additionnant des colonnes
+#         si besoin.
+#         Puis multiplier par la pop et l'âge.
+#         Diviser par la population totale qu'il faudra récupérer dans les données.
+#         Faire la différence entre les deux nombres.
+        
+        if year is None:
+            year = self._year_min
+        
+        no_index = self.reset_index(level=['age'])
+        no_index['private_consumption'] = 0
+        
+        for col in consumption:
+            no_index['private_consumption'] += col
+            
+        no_index['private_consumptions'] *= no_index['age']
+        total_pop = no_index['pop'].cumsum().xs(self._year_min, level='year').get_value()
+        
+        raise NotImplementedError
+        
 
 if __name__ == '__main__':
     pass

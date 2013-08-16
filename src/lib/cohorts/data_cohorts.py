@@ -85,8 +85,8 @@ class DataCohorts(Cohorts):
                 df_tot.append(df_insert, ignore_index=True)
                 df_tot = df_tot.set_index(['age','sex','year'])
         
-        print df_tot
-        print len(df_tot)
+#         print df_tot
+#         print len(df_tot)
         self.update(df_tot)
 
 
@@ -149,9 +149,12 @@ class DataCohorts(Cohorts):
             self.__init__(data = combined, columns = ['pop'])
 
 
-    def proj_tax(self, rate = None , discount_rate = None , typ = None, method = None):
+    def proj_tax(self, rate = None , inflation_rate = None , typ = None, method = None, payments_list=[]):
         """
-        Projects taxes either per_capita or aggregate at the constant growth_rate rate
+        Projects taxes either per_capita or aggregate at the constant growth_rate rate or desynchronized.
+        The desynchronized method projects taxes paid by citizen at the growth rate and government allowances 
+        at the inflation rate. If the method chosed is desynchronized : typ should NOT be None 
+        but the list of taxes.
         
         Parameters
         ----------        
@@ -163,30 +166,44 @@ class DataCohorts(Cohorts):
             which will be expanded
         method : str
             the method used for the projection 
-            the name has to be either 'per_capita' or 'aggregate'
+            the name has to be either 'per_capita' or 'aggregate' or 'desynchronized'
         """
         
         if rate is None:
             raise Exception('no growth_rate provided')
-        if discount_rate is None:
+        if inflation_rate is None:
             self.proj_tax(rate , 0 , typ, method)
             return
-        if method is None:
+        if method is None or not method in ['aggregate', 'per_capita', 'desynchronized']:
             raise Exception('a method should be specified')
         if typ is None:
             for typ in self._types:
-                self.proj_tax(rate , discount_rate , typ, method)
+                self.proj_tax(rate , inflation_rate , typ, method)
             return
-        if typ not in self.columns:
-            raise Exception('this is not a column of cohort')
+#         if typ not in self.columns:
+#             raise Exception('this is not a column of cohort')
         else:
             self.gen_grth(rate)
             if method == "per_capita":
                 self[typ] = self[typ]*self['grth']
                 
+            if method == 'desynchronized':
+                for tax in typ:
+                    self[tax] *= self['grth']
+                
+                self['inflation'] = NaN
+                grouped = self.groupby(level = ['sex', 'age'])['inflation']
+                nb_years = len(self.index_sets['year'])
+                self['inflation'] = grouped.transform(lambda x: ((1+inflation_rate)**(arange(nb_years))))
+                
+                for payment in payments_list:
+                    self[payment] *= self['inflation']
+                
+                del self['inflation']
+                
             if method == "aggregate":
                 typ_years = self._types_years[typ]
-                last_typ_year = max(typ_years)         
+                last_typ_year = max(typ_years)
                 last_typ_pop = self.xs(last_typ_year, level='year', axis=0)  
                 years = self.index_sets['year']
                 last_year = max(years)
@@ -198,8 +215,8 @@ class DataCohorts(Cohorts):
                 
                 self[typ] = self[typ]*self['grth']*frozen_pop["pop"]/self["pop"]
                 # print self
-            else:
-                NotImplementedError
+#             else:
+#                 raise NotImplementedError
 
     def compute_net_transfers(self, name = 'net_transfers', taxes_list = [], payments_list = []):
         """
@@ -275,6 +292,7 @@ class DataCohorts(Cohorts):
         res = res.reset_index()
         res = res.set_index(['age', 'sex', 'year'])
         res.columns = [typ]
+        res = DataFrame(res)
         return AccountingCohorts(res)
 
 
@@ -299,8 +317,53 @@ class DataCohorts(Cohorts):
         pv_gen = self.aggregate_generation_present_value(typ, discount_rate)
         pop = DataFrame({'pop' : self['pop']})
         pv_percapita = DataFrame(pv_gen[typ]/pop['pop'])
-        pv_percapita.columns = [typ]
+        pv_percapita['pop'] = pop['pop']
+        pv_percapita.columns = [typ, 'pop']
         return AccountingCohorts(pv_percapita)
+    
+    def new_per_capita_generation_present_value(self, typ, discount_rate = None):
+        """
+        Returns present net value per capita of the data typ 
+        
+        Parameters
+        ----------
+        typ : str
+              Column name
+        discount_rate : float
+        
+        Returns
+        -------
+        pv_percapita : an AccountingCohorts with column 'typ' containing the per capita present value of typ 
+        
+        """
+        if typ not in self._types:
+            raise Exception('cohort: variable %s is not in self._types' %typ)
+            return
+        if discount_rate is None:
+            discount_rate = 0.0
+        if 'dsct' not in self._types:
+            self.gen_dsct(discount_rate)
+        tmp = self['dsct']*self[typ]
+        tmp = tmp.unstack(level = 'year')  # untack year indices to columns
+        
+        pvm = tmp.xs(0, level='sex')
+        pvf = tmp.xs(1, level='sex') #Assuming 1 is the index for females resp. 0 is male.
+        
+        yr_min = array(list(self.index_sets['year'])).min()
+        yr_max = array(list(self.index_sets['year'])).max()
+        
+        for yr in arange(yr_min, yr_max)[::-1]:
+            pvm[yr] += hstack( [ pvm[yr+1].values[1:], 0]  )
+            pvf[yr] += hstack( [ pvf[yr+1].values[1:], 0]  )
+            
+        pieces = [pvm, pvf]
+        res =  concat(pieces, keys = [0,1], names = ["sex"] )
+        res = res.stack()
+        res = res.reset_index()
+        res = res.set_index(['age', 'sex', 'year'])
+        res.columns = [typ]
+        res = DataFrame(res)
+        return AccountingCohorts(res)
     
     def get_average_difference(self, consumption=[], income=[], year=None):
         """
